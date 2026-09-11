@@ -1,0 +1,74 @@
+CREATE TABLE DimCommercial
+(
+    CommercialCode NVARCHAR(20) PRIMARY KEY,   -- la clé : le code du commercial
+    NomCommercial  NVARCHAR(100),
+    TauxCommission DECIMAL(5,4)              -- 0,0500 = 5 %
+);
+
+INSERT INTO DimCommercial (CommercialCode, NomCommercial, TauxCommission)
+SELECT [Code],
+       ISNULL([Name], [Code]),   -- si quelques commerciaux n'ont pas de nom
+       0.05                      -- la règle 5%
+FROM   STG_NAV.NAV.STG_SalespersonPurchaser;
+
+/* -------------------------------------------------------- */
+
+
+INSERT INTO DimDate (DateVente, Annee, Mois, NomMois, Trimestre)
+SELECT DISTINCT
+       CAST([Posting Date] AS DATE),
+       YEAR([Posting Date]),
+       MONTH([Posting Date]),
+       DATENAME(MONTH, [Posting Date]),
+       DATEPART(QUARTER, [Posting Date])
+FROM   STG_NAV.NAV.STG_SalesInvoiceHeader
+WHERE  CAST([Posting Date] AS DATE) NOT IN (SELECT DateVente FROM DimDate); -- seulement nouvelle date
+
+
+/* -------------------------------------------------------- */
+ 
+CREATE TABLE FaitCommission
+(
+    -- les trois clés
+    DateFacture       DATE,
+    CommercialCode    NVARCHAR(20),
+    ClientNo          NVARCHAR(20),
+    -- les deux mesures
+    MontantCA         DECIMAL(19,4),
+    MontantCommission DECIMAL(19,4)
+);
+
+INSERT INTO FaitCommission (DateFacture, CommercialCode, ClientNo, MontantCA, MontantCommission)
+SELECT
+    CAST(h.[Posting Date] AS DATE),
+    h.[Salesperson Code],             -- le commercial de la FACTURE
+    h.[Sell-to Customer No_],
+    l.[Amount],
+    l.[Amount] * c.TauxCommission    -- le calcul
+FROM   STG_NAV.NAV.STG_SalesInvoiceLine   l
+JOIN   STG_NAV.NAV.STG_SalesInvoiceHeader h ON h.[No_] = l.[Document No_]
+JOIN   DimCommercial                      c ON c.CommercialCode = h.[Salesperson Code];
+
+/* -------------------------------------------------------- */
+
+-- la commission totale
+SELECT SUM(MontantCA)         AS ChiffreAffaires,
+       SUM(MontantCommission) AS Commission
+FROM   FaitCommission;
+
+-- la commission par commerciaux
+SELECT   c.NomCommercial,
+         SUM(f.MontantCA)         AS ChiffreAffaires,
+         SUM(f.MontantCommission) AS Commission
+FROM     FaitCommission f
+JOIN     DimCommercial c ON c.CommercialCode = f.CommercialCode
+GROUP BY c.NomCommercial
+ORDER BY Commission DESC;
+
+-- par jour
+SELECT   d.DateVente, SUM(f.MontantCommission) AS Commission
+FROM     FaitCommission f
+JOIN     DimDate d ON d.DateVente = f.DateFacture
+GROUP BY d.DateVente
+ORDER BY d.DateVente;
+
